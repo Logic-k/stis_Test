@@ -65,6 +65,46 @@ function createCircleCoordinates(lon, lat, radiusMeters, steps = 24) {
 }
 
 /**
+ * 다각형 외곽선 좌표 배열로부터 수학적 무게중심(Centroid [lon, lat]) 계산
+ * @param {Array<[number, number]>} ring
+ * @returns {[number, number]|null} [centerLon, centerLat]
+ */
+function computePolygonCentroid(ring) {
+  if (!ring || ring.length === 0) return null;
+  if (ring.length === 1) return [ring[0][0], ring[0][1]];
+
+  let area = 0;
+  let cx = 0;
+  let cy = 0;
+
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const x0 = ring[j][0], y0 = ring[j][1];
+    const x1 = ring[i][0], y1 = ring[i][1];
+    const cross = (x0 * y1) - (x1 * y0);
+    area += cross;
+    cx += (x0 + x1) * cross;
+    cy += (y0 + y1) * cross;
+  }
+
+  area = area / 2;
+  if (Math.abs(area) < 1e-12) {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < ring.length; i++) {
+      const [x, y] = ring[i];
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    return [(minX + maxX) / 2, (minY + maxY) / 2];
+  }
+
+  cx = cx / (6 * area);
+  cy = cy / (6 * area);
+  return [cx, cy];
+}
+
+/**
  * OpenFreeMap Positron 테마 보정 및 한국어 전용 카토그래피 정제 헬퍼
  * - 시각적 노이즈(도로 쉴드, 중복 행정구역 라벨, POI) 제거
  * - 모든 라벨 한국어 우선 명칭 및 대문자 방지 강제
@@ -200,6 +240,9 @@ export class Map3DEngine {
     this._firstSymbolId = null;
     this._isMapLoaded = false;
     this._facilityClusters = [];
+
+    // 실제 3D 건물 스냅 및 중심점 캐시 (성능 극대화 & 마커 정확도 보장)
+    this._buildingSnapCache = new Map();
   }
 
   /**
@@ -420,10 +463,11 @@ export class Map3DEngine {
       }
     }
 
-    // 10) TotemMarkerManager 인스턴스화
+    // 10) TotemMarkerManager 인스턴스화 (실제 3D 건물 스냅 연동)
     this._totemManager = new TotemMarkerManager(this.map, {
       onSelectFacility: (fac, center) => this.onSelectFacility?.(fac, center),
-      onHoverFacility: (fac) => this.onHoverFacility?.(fac)
+      onHoverFacility: (fac) => this.onHoverFacility?.(fac),
+      getSnappedBuilding: (lon, lat) => this.getSnappedBuilding(lon, lat)
     });
   }
 
@@ -795,139 +839,26 @@ export class Map3DEngine {
    * @private
    */
   _setupFacilityLabelLayer() {
-    const map = this.map;
-    if (!map) return;
-
-    if (!map.getSource('facility-label-points')) {
-      map.addSource('facility-label-points', {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: [] }
-      });
-    }
-
-    if (!map.getLayer('facility-webgl-labels')) {
-      const isDarkHalo = this.theme === 'dark' || this.viewMode === 'satellite';
-      map.addLayer({
-        id: 'facility-webgl-labels',
-        type: 'symbol',
-        source: 'facility-label-points',
-        filter: ['!=', ['get', 'active'], true],
-        layout: {
-          'text-field': ['get', 'label'],
-          'text-font': ['Noto Sans Regular'],
-          'text-size': ['interpolate', ['linear'], ['zoom'], 12.5, 11, 15, 12.2, 17, 13.5],
-          'text-variable-anchor': ['left', 'right', 'bottom', 'top'],
-          'text-radial-offset': 1.45,
-          'text-justify': 'auto',
-          'text-max-width': 11,
-          'text-allow-overlap': false,
-          'text-ignore-placement': false,
-          'text-optional': true,
-          'symbol-sort-key': ['get', 'sortKey']
-        },
-        paint: {
-          'text-color': isDarkHalo ? '#F2F7FA' : '#122530',
-          'text-halo-color': isDarkHalo ? 'rgba(10, 18, 24, 0.95)' : 'rgba(255, 255, 255, 0.96)',
-          'text-halo-width': isDarkHalo ? 2.3 : 2.2,
-          'text-halo-blur': 0.3
-        }
-      }); // beforeId 생략하여 3D 익스트루전 위 최상단 렌더링
-
-      // 클릭 시 해당 시설 선택 콜백 호출
-      map.on('click', 'facility-webgl-labels', (e) => {
-        if (!e.features || e.features.length === 0) return;
-        const cId = e.features[0].properties?.id;
-        const cluster = (this._facilityClusters || []).find(c => c.id === cId);
-        if (cluster && cluster.items && cluster.items.length > 0) {
-          this.onSelectFacility?.(cluster.items[0], true);
-        }
-      });
-
-      // 마우스 오버 시 포인터 커서 반응
-      map.on('mouseenter', 'facility-webgl-labels', () => {
-        if (!this.picking) {
-          map.getCanvas().style.cursor = 'pointer';
-        }
-      });
-      map.on('mouseleave', 'facility-webgl-labels', () => {
-        if (!this.picking) {
-          map.getCanvas().style.cursor = '';
-        }
-      });
-    }
+    // 옥상 스마트 POI 엠블럼 핀이 기관명과 아이콘을 일체형으로 렌더링하므로
+    // 텍스트 분리 이격(40px 오차) 및 렌더링 렉을 유발하던 WebGL 중복 심볼 레이어 완전 제거
   }
 
   /**
-   * 한국어 시설 라벨 GeoJSON 갱신 (groupCoLocated 12m 기반)
-   * 선택/호버된 시설 클러스터는 HTML 팝오버와의 중복 방지를 위해 active=true로 설정
+   * 한국어 시설 라벨 GeoJSON 갱신 (스마트 POI 엠블럼 마커로 일체화되어 no-op 유지)
    * @private
    */
   _updateFacilityLabels() {
-    if (!this.map || !this.map.getSource('facility-label-points')) return;
-
-    const clusters = groupCoLocated(this.facilities || [], 12);
-    this._facilityClusters = clusters;
-
-    const selKey = this.selectedFacility ? facilityKey(this.selectedFacility) : null;
-    const hovKey = this.hoveredFacility ? facilityKey(this.hoveredFacility) : null;
-
-    const features = clusters.map(cluster => {
-      const firstItem = cluster.items[0];
-      const isMulti = cluster.isMulti || cluster.items.length > 1;
-      const label = isMulti
-        ? `${firstItem.name} 외 ${cluster.items.length - 1}곳`
-        : firstItem.name;
-      const color = resolveCatHex(cluster.primaryCat || firstItem.cat, this.theme);
-      const sortKey = Math.round(firstItem.m || 0);
-
-      const active = cluster.items.some(item => {
-        const k = facilityKey(item);
-        return (selKey && k === selKey) || (hovKey && k === hovKey);
-      });
-
-      return {
-        type: 'Feature',
-        geometry: {
-          type: 'Point',
-          coordinates: [cluster.lon, cluster.lat]
-        },
-        properties: {
-          id: cluster.id,
-          label,
-          color,
-          sortKey,
-          active
-        }
-      };
-    });
-
-    this.map.getSource('facility-label-points').setData({
-      type: 'FeatureCollection',
-      features
-    });
   }
 
   /**
-   * 테마 및 위성 뷰모드에 맞춘 WebGL 시설 라벨 페인트 속성 동기화
+   * 시설 라벨 페인트 속성 동기화 (no-op)
    * @private
    */
   _updateFacilityLabelPaint() {
-    if (!this.map || !this.map.getLayer('facility-webgl-labels')) return;
-    const isDarkHalo = this.theme === 'dark' || this.viewMode === 'satellite';
-    const textColor = isDarkHalo ? '#F2F7FA' : '#122530';
-    const haloColor = isDarkHalo ? 'rgba(10, 18, 24, 0.95)' : 'rgba(255, 255, 255, 0.96)';
-    const haloWidth = isDarkHalo ? 2.3 : 2.2;
-    const haloBlur = 0.3;
-
-    this.map.setPaintProperty('facility-webgl-labels', 'text-color', textColor);
-    this.map.setPaintProperty('facility-webgl-labels', 'text-halo-color', haloColor);
-    this.map.setPaintProperty('facility-webgl-labels', 'text-halo-width', haloWidth);
-    this.map.setPaintProperty('facility-webgl-labels', 'text-halo-blur', haloBlur);
   }
 
   /**
-   * 화면에 렌더링된 실제 단일 3D 건물 폴리곤 정밀 검색 (Overture 전용 + 지리좌표 Point-in-Polygon 검증)
-   * - OpenMapTiles 블록 병합 MultiPolygon 및 3D 원근 투영 전경 건물 오매칭 원천 차단
+   * 화면에 렌더링된 실제 3D 건물 폴리곤 정밀 검색
    * @param {number} lon
    * @param {number} lat
    * @returns {Object|null}
@@ -935,20 +866,27 @@ export class Map3DEngine {
    */
   _findRenderedBuildingFeature(lon, lat) {
     if (!this.map || lon == null || lat == null) return null;
-    if (!this.map.getLayer('overture-3d-buildings')) return null;
+    const cacheKey = `${lon.toFixed(5)}_${lat.toFixed(5)}`;
+    if (this._buildingSnapCache && this._buildingSnapCache.has(cacheKey)) {
+      return this._buildingSnapCache.get(cacheKey).feature;
+    }
+
+    const buildingLayers = ['overture-3d-buildings', 'overture-3d-building-parts', 'ofm-3d-buildings-fallback']
+      .filter(id => this.map.getLayer(id));
+    if (buildingLayers.length === 0) return null;
 
     try {
       const canvas = this.map.getCanvas();
       const p = this.map.project([lon, lat]);
-      if (p.x < -24 || p.y < -24 || p.x > canvas.clientWidth + 24 || p.y > canvas.clientHeight + 24) {
+      if (p.x < -64 || p.y < -64 || p.x > canvas.clientWidth + 64 || p.y > canvas.clientHeight + 64) {
         return null;
       }
 
       const bbox = [
-        [p.x - 16, p.y - 16],
-        [p.x + 16, p.y + 16]
+        [p.x - 48, p.y - 48],
+        [p.x + 48, p.y + 48]
       ];
-      const rendered = this.map.queryRenderedFeatures(bbox, { layers: ['overture-3d-buildings'] });
+      const rendered = this.map.queryRenderedFeatures(bbox, { layers: buildingLayers });
       if (!rendered || rendered.length === 0) return null;
 
       let bestFeature = null;
@@ -956,70 +894,121 @@ export class Map3DEngine {
 
       for (let i = 0; i < rendered.length; i++) {
         const f = rendered[i];
-        if (!f.geometry || f.geometry.type !== 'Polygon') continue;
-        const ring = f.geometry.coordinates && f.geometry.coordinates[0];
-        if (!ring || ring.length < 4) continue;
+        if (!f.geometry) continue;
 
-        let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
-        for (let j = 0; j < ring.length; j++) {
-          const rx = ring[j][0];
-          const ry = ring[j][1];
-          if (rx < minLon) minLon = rx;
-          if (rx > maxLon) maxLon = rx;
-          if (ry < minLat) minLat = ry;
-          if (ry > maxLat) maxLat = ry;
+        const ringsList = [];
+        if (f.geometry.type === 'Polygon' && Array.isArray(f.geometry.coordinates)) {
+          ringsList.push(f.geometry.coordinates[0]);
+        } else if (f.geometry.type === 'MultiPolygon' && Array.isArray(f.geometry.coordinates)) {
+          for (let m = 0; m < f.geometry.coordinates.length; m++) {
+            if (f.geometry.coordinates[m]?.[0]) ringsList.push(f.geometry.coordinates[m][0]);
+          }
         }
 
-        // 단일 건물 크기 상한 (~160m) 및 좌표 주변 11m AABB 필터 (원근 가림 건물 오매칭 차단)
-        if ((maxLon - minLon) > 0.0018 || (maxLat - minLat) > 0.0018) continue;
-        if (lon < minLon - 0.00012 || lon > maxLon + 0.00012 || lat < minLat - 0.00010 || lat > maxLat + 0.00010) {
-          continue;
-        }
+        for (let rIdx = 0; rIdx < ringsList.length; rIdx++) {
+          const ring = ringsList[rIdx];
+          if (!ring || ring.length < 4) continue;
 
-        // 1) Ray-casting Point-in-Polygon 검사
-        let inside = false;
-        for (let j = 0, k = ring.length - 1; j < ring.length; k = j++) {
-          const xi = ring[j][0], yi = ring[j][1];
-          const xk = ring[k][0], yk = ring[k][1];
-          const intersect = ((yi > lat) !== (yk > lat)) &&
-            (lon < (xk - xi) * (lat - yi) / ((yk - yi) || 1e-12) + xi);
-          if (intersect) inside = !inside;
-        }
+          let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+          for (let j = 0; j < ring.length; j++) {
+            const rx = ring[j][0];
+            const ry = ring[j][1];
+            if (rx < minLon) minLon = rx;
+            if (rx > maxLon) maxLon = rx;
+            if (ry < minLat) minLat = ry;
+            if (ry > maxLat) maxLat = ry;
+          }
 
-        if (inside) {
-          return f;
-        }
+          // 건물 외곽 AABB 필터 (반경 ~60m 이내)
+          if ((maxLon - minLon) > 0.0035 || (maxLat - minLat) > 0.0035) continue;
+          if (lon < minLon - 0.00045 || lon > maxLon + 0.00045 || lat < minLat - 0.00040 || lat > maxLat + 0.00040) {
+            continue;
+          }
 
-        // 2) 도로명주소 출입구 좌표 오차 허용 (외벽에서 8m 이내 최단거리 건물)
-        let minEdgeSq = Infinity;
-        for (let j = 0, k = ring.length - 1; j < ring.length; k = j++) {
-          const ax = (ring[k][0] - lon) * 89800;
-          const ay = (ring[k][1] - lat) * 111320;
-          const bx = (ring[j][0] - lon) * 89800;
-          const by = (ring[j][1] - lat) * 111320;
-          const dx = bx - ax;
-          const dy = by - ay;
-          const lenSq = dx * dx + dy * dy;
-          let t = lenSq > 0 ? -(ax * dx + ay * dy) / lenSq : 0;
-          if (t < 0) t = 0;
-          else if (t > 1) t = 1;
-          const px = ax + t * dx;
-          const py = ay + t * dy;
-          const dSq = px * px + py * py;
-          if (dSq < minEdgeSq) minEdgeSq = dSq;
-        }
+          // 1) Ray-casting Point-in-Polygon 검사
+          let inside = false;
+          for (let j = 0, k = ring.length - 1; j < ring.length; k = j++) {
+            const xi = ring[j][0], yi = ring[j][1];
+            const xk = ring[k][0], yk = ring[k][1];
+            const intersect = ((yi > lat) !== (yk > lat)) &&
+              (lon < (xk - xi) * (lat - yi) / ((yk - yi) || 1e-12) + xi);
+            if (intersect) inside = !inside;
+          }
 
-        const edgeDistM = Math.sqrt(minEdgeSq);
-        if (edgeDistM <= 8 && edgeDistM < bestDistM) {
-          bestDistM = edgeDistM;
-          bestFeature = f;
+          if (inside) {
+            bestFeature = f;
+            bestDistM = 0;
+            break;
+          }
+
+          // 2) 도로명 출입구/대문 오차 보정 (건물 외벽에서 36m 이내 최단거리 건물)
+          let minEdgeSq = Infinity;
+          for (let j = 0, k = ring.length - 1; j < ring.length; k = j++) {
+            const ax = (ring[k][0] - lon) * 89800;
+            const ay = (ring[k][1] - lat) * 111320;
+            const bx = (ring[j][0] - lon) * 89800;
+            const by = (ring[j][1] - lat) * 111320;
+            const dx = bx - ax;
+            const dy = by - ay;
+            const lenSq = dx * dx + dy * dy;
+            let t = lenSq > 0 ? -(ax * dx + ay * dy) / lenSq : 0;
+            if (t < 0) t = 0;
+            else if (t > 1) t = 1;
+            const px = ax + t * dx;
+            const py = ay + t * dy;
+            const dSq = px * px + py * py;
+            if (dSq < minEdgeSq) minEdgeSq = dSq;
+          }
+
+          const edgeDistM = Math.sqrt(minEdgeSq);
+          if (edgeDistM <= 36 && edgeDistM < bestDistM) {
+            bestDistM = edgeDistM;
+            bestFeature = f;
+          }
         }
+        if (bestDistM === 0) break;
+      }
+
+      if (bestFeature && bestFeature.geometry) {
+        let ring = null;
+        if (bestFeature.geometry.type === 'Polygon') {
+          ring = bestFeature.geometry.coordinates[0];
+        } else if (bestFeature.geometry.type === 'MultiPolygon') {
+          ring = bestFeature.geometry.coordinates[0]?.[0];
+        }
+        const centroid = (ring && computePolygonCentroid(ring)) || [lon, lat];
+        const height = Math.max(Number(bestFeature.properties?.height || bestFeature.properties?.render_height) || 18, 16);
+        this._buildingSnapCache.set(cacheKey, {
+          feature: bestFeature,
+          centroid,
+          height
+        });
       }
 
       return bestFeature;
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 해당 좌표에 해당하는 실제 3D 건물 스냅 정보({ centroid: [lon, lat], height, feature }) 조회
+   * - 마커 배지를 건물 지붕 정중앙에 정확히 올리고 3D 포물선 아크를 옥상에 착륙시키는데 사용
+   * @param {number} lon
+   * @param {number} lat
+   * @returns {{ centroid: [number, number], height: number, feature: Object|null }}
+   */
+  getSnappedBuilding(lon, lat) {
+    if (lon == null || lat == null) return { centroid: [lon, lat], height: 0, feature: null };
+    const cacheKey = `${lon.toFixed(5)}_${lat.toFixed(5)}`;
+    if (this._buildingSnapCache && this._buildingSnapCache.has(cacheKey)) {
+      return this._buildingSnapCache.get(cacheKey);
+    }
+    const feat = this._findRenderedBuildingFeature(lon, lat);
+    if (this._buildingSnapCache && this._buildingSnapCache.has(cacheKey)) {
+      return this._buildingSnapCache.get(cacheKey);
+    }
+    return { centroid: [lon, lat], height: 0, feature: feat };
   }
 
   /**
@@ -1106,18 +1095,26 @@ export class Map3DEngine {
     }
 
     // 선택/호버 시설 변경
-    if (selectedFacility !== undefined && selectedFacility !== this.selectedFacility) {
-      this.selectedFacility = selectedFacility;
-      shouldUpdateDeck = true;
-      shouldUpdateSpotlight = true;
-      shouldUpdateLabels = true;
+    if (selectedFacility !== undefined) {
+      const prevKey = this.selectedFacility ? facilityKey(this.selectedFacility) : null;
+      const nextKey = selectedFacility ? facilityKey(selectedFacility) : null;
+      if (prevKey !== nextKey || selectedFacility !== this.selectedFacility) {
+        this.selectedFacility = selectedFacility;
+        shouldUpdateDeck = true;
+        shouldUpdateSpotlight = true;
+        shouldUpdateLabels = true;
+      }
     }
 
-    if (hoveredFacility !== undefined && hoveredFacility !== this.hoveredFacility) {
-      this.hoveredFacility = hoveredFacility;
-      shouldUpdateDeck = true;
-      shouldUpdateSpotlight = true;
-      shouldUpdateLabels = true;
+    if (hoveredFacility !== undefined) {
+      const prevHovKey = this.hoveredFacility ? facilityKey(this.hoveredFacility) : null;
+      const nextHovKey = hoveredFacility ? facilityKey(hoveredFacility) : null;
+      if (prevHovKey !== nextHovKey || hoveredFacility !== this.hoveredFacility) {
+        this.hoveredFacility = hoveredFacility;
+        shouldUpdateDeck = true;
+        shouldUpdateSpotlight = true;
+        shouldUpdateLabels = true;
+      }
     }
 
     // 좌표 지정 모드 변경
@@ -1241,6 +1238,7 @@ export class Map3DEngine {
    * 기관 및 기준 학교 스포트라이트 발광 프리즘/폴리곤 갱신
    * 화면 내 렌더링된 실제 3D 건물 폴리곤(Overture/OFM)을 탐색하여 일치 시 직사각형 실제 건물을 그대로 하이라이트하고,
    * 미매칭 시 정밀 원형 프리즘으로 깔끔하게 폴백
+   * - 미선택 시설에 대한 수백 개 불필요 원통 생성을 제거하여 프레임 드랍 원천 차단
    * @private
    */
   _updateSpotlightFootprints() {
@@ -1250,7 +1248,7 @@ export class Map3DEngine {
     const selKey = this.selectedFacility ? facilityKey(this.selectedFacility) : null;
     const hovKey = this.hoveredFacility ? facilityKey(this.hoveredFacility) : null;
 
-    // 1) 기준 학교: 실제 건물 폴리곤 매칭 시도, 미매칭 시 radius 14, steps 24, height 28 원형 프리즘 폴백
+    // 1) 기준 학교: 실제 건물 폴리곤 매칭 시도, 미매칭 시 radius 14 원형 프리즘 폴백
     if (this.school && this.school.lon != null && this.school.lat != null) {
       const schoolBuilding = this._findRenderedBuildingFeature(this.school.lon, this.school.lat);
       if (schoolBuilding && schoolBuilding.geometry) {
@@ -1277,63 +1275,45 @@ export class Map3DEngine {
       }
     }
 
-    // 2) 기관별 프리즘: 선택/호버된 기관은 실제 건물 폴리곤(또는 12m 원형 프리즘), 미선택 기관은 은은한 8m 그라운드 플린스(height: 6)
-    const facilities = this.facilities || [];
-    const seenPlinthCoords = new Set();
+    // 2) 선택된 시설 및 호버된 시설만 실제 건물 3D 하이라이트 (미선택 시설 138개 루프 완전 제거)
+    const activeTargets = [];
+    if (this.selectedFacility) activeTargets.push(this.selectedFacility);
+    if (this.hoveredFacility && facilityKey(this.hoveredFacility) !== selKey) {
+      activeTargets.push(this.hoveredFacility);
+    }
 
-    for (let i = 0; i < facilities.length; i++) {
-      const f = facilities[i];
+    for (let i = 0; i < activeTargets.length; i++) {
+      const f = activeTargets[i];
       if (f.lon == null || f.lat == null) continue;
 
       const fKey = facilityKey(f);
       const isSelected = selKey === fKey;
-      const isHovered = hovKey === fKey;
       const catColor = resolveCatHex(f.cat, this.theme);
 
-      if (isSelected || isHovered) {
-        const buildingFeat = this._findRenderedBuildingFeature(f.lon, f.lat);
-        if (buildingFeat && buildingFeat.geometry) {
-          const height = Math.max(Number(buildingFeat.properties?.height) || 18, 16) + 1.5;
-          features.push({
-            type: 'Feature',
-            properties: {
-              id: fKey,
-              color: catColor,
-              height,
-              base: 0,
-              opacity: isSelected ? 0.95 : 0.88,
-              isSelected,
-              isHovered
-            },
-            geometry: buildingFeat.geometry
-          });
-        } else {
-          // 건물 폴리곤 미매칭 시 12m 원형 프리즘으로 깔끔하게 폴백
-          features.push(createCircleGeoJSON(f.lon, f.lat, 12, 24, {
+      const buildingFeat = this._findRenderedBuildingFeature(f.lon, f.lat);
+      if (buildingFeat && buildingFeat.geometry) {
+        const height = Math.max(Number(buildingFeat.properties?.height) || 18, 16) + 1.8;
+        features.push({
+          type: 'Feature',
+          properties: {
             id: fKey,
             color: catColor,
-            height: isSelected ? 38 : 26,
+            height,
             base: 0,
-            opacity: isSelected ? 0.95 : 0.88,
-            isSelected,
-            isHovered
-          }));
-        }
+            opacity: isSelected ? 0.96 : 0.88,
+            isSelected
+          },
+          geometry: buildingFeat.geometry
+        });
       } else {
-        // 미선택 기관용 은은한 8m 높이 6 그라운드 플린스
-        const coordKey = `${f.lon.toFixed(5)}_${f.lat.toFixed(5)}`;
-        if (!seenPlinthCoords.has(coordKey)) {
-          seenPlinthCoords.add(coordKey);
-          features.push(createCircleGeoJSON(f.lon, f.lat, 8, 16, {
-            id: fKey,
-            color: catColor,
-            height: 6,
-            base: 0,
-            opacity: 0.42,
-            isSelected: false,
-            isHovered: false
-          }));
-        }
+        features.push(createCircleGeoJSON(f.lon, f.lat, 12, 24, {
+          id: fKey,
+          color: catColor,
+          height: isSelected ? 36 : 24,
+          base: 0,
+          opacity: isSelected ? 0.96 : 0.88,
+          isSelected
+        }));
       }
     }
 
@@ -1345,6 +1325,8 @@ export class Map3DEngine {
 
   /**
    * deck.gl 인터리브드 레이어 (3D 아크 + 대략위치 홀로그램) 갱신
+   * - 거미줄처럼 펼쳐지던 수십 개 아크를 오직 선택된(또는 호버된) 기관 1개로 단일화
+   * - 실제 건물 옥상 높이에 아크가 착륙하도록 정밀화 및 렉 완벽 제거
    * @private
    */
   _updateDeckLayers() {
@@ -1354,71 +1336,53 @@ export class Map3DEngine {
     const layers = [];
 
     const school = this.school;
-    const facilities = this.facilities || [];
-    const selKey = this.selectedFacility ? facilityKey(this.selectedFacility) : null;
-    const hovKey = this.hoveredFacility ? facilityKey(this.hoveredFacility) : null;
+    const targetFacility = this.selectedFacility || this.hoveredFacility;
+    const isSel = Boolean(this.selectedFacility);
 
-    // 1) 3D 포물선 연결 아크 (학교 -> 기관)
-    if (school && school.lon != null && school.lat != null && facilities.length > 0) {
+    // 1) 3D 포물선 연결 아크: 오직 집중 대상 기관 1개에만 발사
+    if (school && school.lon != null && school.lat != null && targetFacility && targetFacility.lon != null && targetFacility.lat != null) {
       const schoolElevation = this.sampleElevation(school.lon, school.lat) || 0;
-      const sourcePos = [school.lon, school.lat, schoolElevation + 12];
+      const schoolSnapped = this.getSnappedBuilding(school.lon, school.lat);
+      const schoolPos = [
+        schoolSnapped.centroid[0],
+        schoolSnapped.centroid[1],
+        schoolElevation + (schoolSnapped.height || 18) + 2
+      ];
+
+      const facSnapped = this.getSnappedBuilding(targetFacility.lon, targetFacility.lat);
+      const facElevation = this.sampleElevation(facSnapped.centroid[0], facSnapped.centroid[1]) || 0;
+      const targetPos = [
+        facSnapped.centroid[0],
+        facSnapped.centroid[1],
+        facElevation + (facSnapped.height || 18) + 2
+      ];
+
+      const catRgb = resolveCatRgb(targetFacility.cat, this.theme);
 
       const arcLayer = new ArcLayer({
-        id: 'facility-arcs-3d',
-        data: facilities,
+        id: 'facility-focus-arc-3d',
+        data: [{ id: facilityKey(targetFacility), cat: targetFacility.cat }],
         pickable: false,
         greatCircle: false,
-        getSourcePosition: () => sourcePos,
-        getTargetPosition: (d) => {
-          const elev = this.sampleElevation(d.lon, d.lat) || 0;
-          return [d.lon, d.lat, elev + 8];
-        },
-        getSourceColor: (d) => {
-          const fKey = facilityKey(d);
-          const isSel = selKey === fKey;
-          const isHov = hovKey === fKey;
-          return [242, 164, 58, (isSel || isHov) ? 255 : 140];
-        },
-        getTargetColor: (d) => {
-          const fKey = facilityKey(d);
-          const isSel = selKey === fKey;
-          const isHov = hovKey === fKey;
-          const rgb = resolveCatRgb(d.cat, this.theme);
-          const alpha = isSel ? 255 : (isHov ? 240 : 115);
-          return [rgb[0], rgb[1], rgb[2], alpha];
-        },
-        getWidth: (d) => {
-          const fKey = facilityKey(d);
-          if (selKey === fKey) return 5.5;
-          if (hovKey === fKey) return 4.5;
-          return 2.0;
-        },
-        getHeight: (d) => {
-          const fKey = facilityKey(d);
-          return (selKey === fKey || hovKey === fKey) ? 0.45 : 0.28;
-        },
-        updateTriggers: {
-          getSourceColor: [selKey, hovKey],
-          getTargetColor: [selKey, hovKey],
-          getWidth: [selKey, hovKey],
-          getHeight: [selKey, hovKey]
-        }
+        getSourcePosition: () => schoolPos,
+        getTargetPosition: () => targetPos,
+        getSourceColor: () => [242, 164, 58, 255],
+        getTargetColor: () => [catRgb[0], catRgb[1], catRgb[2], 255],
+        getWidth: isSel ? 6.0 : 4.5,
+        getHeight: 0.42
       });
 
       layers.push(arcLayer);
     }
 
-    // 2) ap === 1 대략 위치 기관용 3D 불확실성 홀로그램 원기둥
-    const approxFacilities = facilities.filter(r => r.ap && r.lon != null && r.lat != null);
-    if (approxFacilities.length > 0) {
-      const hologramData = approxFacilities.map(r => ({
-        ...r,
-        polygon: createCircleCoordinates(r.lon, r.lat, 75, 24)
-      }));
-
+    // 2) ap === 1 대략 위치 기관용 3D 불확실성 홀로그램 원기둥 (대상 시설일 때만 렌더링)
+    if (targetFacility && targetFacility.ap && targetFacility.lon != null && targetFacility.lat != null) {
       const hologramLayer = new PolygonLayer({
-        id: 'approx-hologram-cylinders',
-        data: hologramData,
+        id: 'approx-hologram-cylinder',
+        data: [{
+          polygon: createCircleCoordinates(targetFacility.lon, targetFacility.lat, 75, 24),
+          cat: targetFacility.cat
+        }],
         pickable: false,
         stroked: true,
         filled: true,
@@ -1436,7 +1400,6 @@ export class Map3DEngine {
         },
         getLineWidth: 2
       });
-
       layers.push(hologramLayer);
     }
 
@@ -1468,38 +1431,61 @@ export class Map3DEngine {
       duration: 1100,
       essential: true
     });
+
+    this.map.once('idle', () => {
+      this._updateSpotlightFootprints();
+      this._updateDeckLayers();
+      this._totemManager?.sync({
+        school: this.school,
+        facilities: this.facilities,
+        selectedFacility: this.selectedFacility,
+        hoveredFacility: this.hoveredFacility
+      });
+    });
   }
 
   /**
    * 특정 기관으로 클로즈업 포커스
+   * - 실제 3D 건물 중심점으로 카메라 착지하여 건물과 배지가 시야 정중앙에 배치
    * @param {Object} school 기준 학교
    * @param {Object} facility 대상 기관
    */
   focusFacility(school, facility) {
     if (!this.map || !facility || facility.lon == null || facility.lat == null) return;
 
+    const snapped = this.getSnappedBuilding(facility.lon, facility.lat);
+    const centerLon = snapped.centroid ? snapped.centroid[0] : facility.lon;
+    const centerLat = snapped.centroid ? snapped.centroid[1] : facility.lat;
+
     let bearing = 0;
     if (this.viewMode !== 'flat2d' && school && school.lon != null && school.lat != null) {
-      const dx = facility.lon - school.lon;
-      const dy = facility.lat - school.lat;
+      const dx = centerLon - school.lon;
+      const dy = centerLat - school.lat;
       bearing = Math.atan2(dx, dy) * (180 / Math.PI);
     }
 
-    const pitch = this.viewMode === 'flat2d' ? 0 : 65;
+    const pitch = this.viewMode === 'flat2d' ? 0 : 58;
 
     this.map.flyTo({
-      center: [facility.lon, facility.lat],
-      zoom: 17.3,
+      center: [centerLon, centerLat],
+      zoom: 16.6,
       pitch,
       bearing,
-      padding: { top: 52, bottom: 92, left: 28, right: 28 },
+      padding: { top: 60, bottom: 140, left: 32, right: 32 },
       duration: 1000,
       essential: true
     });
 
-    // 고배율 줌 전환 후 고해상도 Overture 건물 폴리곤 로드 완료 시 스포트라이트 자동 스냅
+    // 고배율 줌 전환 후 고해상도 Overture 건물 폴리곤 로드 완료 시 스포트라이트 및 마커 위치 자동 재정렬
     this.map.once('idle', () => {
       this._updateSpotlightFootprints();
+      this._updateDeckLayers();
+      this._totemManager?.sync({
+        school: this.school,
+        facilities: this.facilities,
+        selectedFacility: this.selectedFacility,
+        hoveredFacility: this.hoveredFacility
+      });
     });
   }
 

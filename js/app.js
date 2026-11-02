@@ -635,6 +635,28 @@ function refreshInspector() {
   syncSelectedAccordion();
 }
 
+let hoverDebounceTimer = null;
+/**
+ * 기관 호버 상태 디바운스 적용 (마우스 빠른 스크롤 시 프레임 드랍 100% 차단)
+ * @param {Object|null} fac
+ * @param {number} delay
+ */
+function setHoveredFacility(fac, delay = 45) {
+  if (hoverDebounceTimer) {
+    clearTimeout(hoverDebounceTimer);
+    hoverDebounceTimer = null;
+  }
+  if (delay === 0) {
+    S.hov = fac;
+    mapEngine?.updateState({ hoveredFacility: S.hov });
+    return;
+  }
+  hoverDebounceTimer = setTimeout(() => {
+    S.hov = fac;
+    mapEngine?.updateState({ hoveredFacility: S.hov });
+  }, delay);
+}
+
 /**
  * 기관 선택/해제 처리
  * @param {Object} r 시설 객체
@@ -817,15 +839,13 @@ function render() {
           </div>
         `;
 
-        // 마우스 호버 시 3D 포물선 아크 및 건물 프리즘 실시간 발광
+        // 마우스 호버 시 3D 포물선 아크 및 건물 프리즘 디바운스 발광 (렉 제거)
         itemEl.addEventListener('mouseenter', () => {
-          S.hov = r;
-          mapEngine?.updateState({ hoveredFacility: S.hov });
+          setHoveredFacility(r, 45);
         });
         itemEl.addEventListener('mouseleave', () => {
           if (S.hov && facilityKey(S.hov) === key) {
-            S.hov = null;
-            mapEngine?.updateState({ hoveredFacility: null });
+            setHoveredFacility(null, 45);
           }
         });
 
@@ -954,8 +974,7 @@ mapEngine = new Map3DEngine({
     selectFacility(fac, true);
   },
   onHoverFacility: (fac) => {
-    S.hov = fac;
-    mapEngine.updateState({ hoveredFacility: S.hov });
+    setHoveredFacility(fac, 45);
   },
   onPickLocation: ({ lat, lon }) => {
     setPicking(false);
@@ -1021,3 +1040,11 @@ async function initApplication() {
 
 // 애플리케이션 시작
 initApplication();
+
+// 디버깅 및 E2E 테스트 검증용 인터페이스 노출
+if (typeof window !== 'undefined') {
+  window.__mapEngine = mapEngine;
+  window.__D = D;
+  window.__setSchool = setSchool;
+  window.__selectFacility = selectFacility;
+}

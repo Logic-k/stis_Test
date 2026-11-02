@@ -490,13 +490,26 @@ export class InspectorPanel {
         const isActive = (key === currentKey);
         return `<button type="button" class="dock-sib-chip ${isActive ? 'is-active' : ''}" data-action="select-sibling" data-key="${escHtml(key)}">#${idx + 1} ${escHtml(sib.name)}</button>`;
       }).join('');
-      siblingsDockHtml = `<div class="dock-siblings">${chips}</div>`;
+      siblingsDockHtml = `
+        <div class="dock-siblings">
+          <span class="dock-sib-label">🏢 입주기관(${siblings.length}):</span>
+          ${chips}
+        </div>
+      `;
     }
 
-    // Centered telemetry metrics
-    const metricsHtml = isTerrainReady
-      ? `<span>직선 <b>${fmtDist(facility.m)}</b></span><span>오르막 <b>+${gainMeters}m</b></span><span>도보 <b>약 ${slopeMins}분</b></span>`
-      : `<span>직선 <b>${fmtDist(facility.m)}</b></span><span>도보 <b>약 ${estMins}분</b></span>`;
+    // Centered telemetry metrics: 도보 소요 시간 최우선 강조
+    const displayMins = isTerrainReady ? slopeMins : estMins;
+    const metricsHtml = `
+      <div class="dock-walk-badge">
+        <span class="dock-walk-icon">🚶</span>
+        <span class="dock-walk-val">도보 <strong>약 ${displayMins}분</strong></span>
+      </div>
+      <div class="dock-dist-sub">
+        <span>직선 <b>${fmtDist(facility.m)}</b></span>
+        ${isTerrainReady && gainMeters > 0 ? `<span class="dock-climb">오르막 <b>+${gainMeters}m</b></span>` : ''}
+      </div>
+    `;
 
     const phoneBtnHtml = hasPhone
       ? `<a class="dock-btn dock-btn--primary" href="tel:${cleanPh}" title="${escHtml(facility.ph)} 전화 걸기">📞 <span class="dock-btn-txt">${escHtml(facility.ph)}</span></a>`
