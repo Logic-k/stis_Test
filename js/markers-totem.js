@@ -524,6 +524,15 @@ export class TotemMarkerManager {
     if (!maplibregl) return;
 
     if (this._schoolMarker && this._schoolKey === schoolKey) {
+      // 3D 지형/건물 타일 로드 후 기준 학교 비콘 좌표 자동 동기화
+      if (this.getSnappedBuilding && school.lon != null && school.lat != null) {
+        const snapped = this.getSnappedBuilding(school.lon, school.lat);
+        const schoolPos = (snapped && snapped.centroid) ? snapped.centroid : [school.lon, school.lat];
+        const curLngLat = this._schoolMarker.getLngLat();
+        if (curLngLat && (Math.abs(curLngLat.lng - schoolPos[0]) > 1e-6 || Math.abs(curLngLat.lat - schoolPos[1]) > 1e-6)) {
+          this._schoolMarker.setLngLat(schoolPos);
+        }
+      }
       return;
     }
 
@@ -592,10 +601,21 @@ export class TotemMarkerManager {
     const hoveredKey = hoveredFacility ? facilityKey(hoveredFacility) : null;
     const sig = facilities.map(r => `${facilityKey(r)}:${Math.round(r.m || 0)}`).join('|');
 
-    // 시설 목록이 동일하면 DOM 재생성 없이 클래스 및 배지 상태만 즉시 갱신 (클릭 유실 및 깜빡임 원천 차단)
+    // 시설 목록이 동일하면 DOM 재생성 없이 좌표/클래스/배지 상태만 즉시 갱신 (클릭 유실 및 깜빡임 원천 차단)
     if (sig === this._facilitiesSig && this._markerRecords.length > 0) {
       for (let i = 0; i < this._markerRecords.length; i++) {
         const rec = this._markerRecords[i];
+
+        // 3D 건물 타일 로드 후 실제 옥상 중심점으로 위치 동기화
+        if (rec.marker && this.getSnappedBuilding && rec.lon != null && rec.lat != null) {
+          const snapped = this.getSnappedBuilding(rec.lon, rec.lat);
+          const targetPos = (snapped && snapped.centroid) ? snapped.centroid : [rec.lon, rec.lat];
+          const curLngLat = rec.marker.getLngLat();
+          if (curLngLat && (Math.abs(curLngLat.lng - targetPos[0]) > 1e-6 || Math.abs(curLngLat.lat - targetPos[1]) > 1e-6)) {
+            rec.marker.setLngLat(targetPos);
+          }
+        }
+
         if (rec.type === 'single') {
           const fKey = rec.keys[0];
           rec.el.classList.toggle('is-selected', selectedKey === fKey);
@@ -725,7 +745,17 @@ export class TotemMarkerManager {
       .setLngLat(lngLat)
       .addTo(this.map);
 
-    return { marker, record: { type: 'single', el, keys: [fKey] } };
+    return {
+      marker,
+      record: {
+        type: 'single',
+        el,
+        keys: [fKey],
+        marker,
+        lon: facility.lon,
+        lat: facility.lat
+      }
+    };
   }
 
   /**
@@ -909,7 +939,10 @@ export class TotemMarkerManager {
         items,
         badgeEl,
         badgeIconEl,
-        titleEl
+        titleEl,
+        marker,
+        lon: cluster.lon,
+        lat: cluster.lat
       }
     };
   }

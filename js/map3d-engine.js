@@ -859,6 +859,8 @@ export class Map3DEngine {
 
   /**
    * 화면에 렌더링된 실제 3D 건물 폴리곤 정밀 검색
+   * - 거대 병합 폴리곤(MultiPolygon) 오인식 및 원거리(>22m) 도약 차단 안전 알고리즘 적용
+   * - 실제 건물 외곽선(bestRing)을 단일 다각형으로 분리하여 마커 배지와 스포트라이트 100% 동기화
    * @param {number} lon
    * @param {number} lat
    * @returns {Object|null}
@@ -883,12 +885,13 @@ export class Map3DEngine {
       }
 
       const bbox = [
-        [p.x - 48, p.y - 48],
-        [p.x + 48, p.y + 48]
+        [p.x - 32, p.y - 32],
+        [p.x + 32, p.y + 32]
       ];
       const rendered = this.map.queryRenderedFeatures(bbox, { layers: buildingLayers });
       if (!rendered || rendered.length === 0) return null;
 
+      let bestRing = null;
       let bestFeature = null;
       let bestDistM = Infinity;
 
@@ -919,9 +922,12 @@ export class Map3DEngine {
             if (ry > maxLat) maxLat = ry;
           }
 
-          // 건물 외곽 AABB 필터 (반경 ~60m 이내)
-          if ((maxLon - minLon) > 0.0035 || (maxLat - minLat) > 0.0035) continue;
-          if (lon < minLon - 0.00045 || lon > maxLon + 0.00045 || lat < minLat - 0.00040 || lat > maxLat + 0.00040) {
+          // 거대 병합 블록/행정구역 배제 (한 변 > 100m)
+          const spanM = Math.max((maxLon - minLon) * 89800, (maxLat - minLat) * 111320);
+          if (spanM > 100) continue;
+
+          // 좌표에서 바운딩 박스가 25m 이상 떨어진 폴리곤 제외
+          if (lon < minLon - 0.00030 || lon > maxLon + 0.00030 || lat < minLat - 0.00025 || lat > maxLat + 0.00025) {
             continue;
           }
 
@@ -936,12 +942,13 @@ export class Map3DEngine {
           }
 
           if (inside) {
-            bestFeature = f;
             bestDistM = 0;
+            bestRing = ring;
+            bestFeature = f;
             break;
           }
 
-          // 2) 도로명 출입구/대문 오차 보정 (건물 외벽에서 36m 이내 최단거리 건물)
+          // 2) 도로명 출입구/대문 오차 보정 (건물 외벽에서 20m 이내 최단거리 건물)
           let minEdgeSq = Infinity;
           for (let j = 0, k = ring.length - 1; j < ring.length; k = j++) {
             const ax = (ring[k][0] - lon) * 89800;
@@ -961,31 +968,40 @@ export class Map3DEngine {
           }
 
           const edgeDistM = Math.sqrt(minEdgeSq);
-          if (edgeDistM <= 36 && edgeDistM < bestDistM) {
+          if (edgeDistM <= 20 && edgeDistM < bestDistM) {
             bestDistM = edgeDistM;
+            bestRing = ring;
             bestFeature = f;
           }
         }
         if (bestDistM === 0) break;
       }
 
-      if (bestFeature && bestFeature.geometry) {
-        let ring = null;
-        if (bestFeature.geometry.type === 'Polygon') {
-          ring = bestFeature.geometry.coordinates[0];
-        } else if (bestFeature.geometry.type === 'MultiPolygon') {
-          ring = bestFeature.geometry.coordinates[0]?.[0];
+      if (bestRing && bestFeature) {
+        const centroid = computePolygonCentroid(bestRing);
+        if (centroid) {
+          const cDistM = Math.sqrt(Math.pow((centroid[0] - lon) * 89800, 2) + Math.pow((centroid[1] - lat) * 111320, 2));
+          if (cDistM <= 22) {
+            const height = Math.max(Number(bestFeature.properties?.height || bestFeature.properties?.render_height) || 18, 16);
+            const isolatedFeature = {
+              type: 'Feature',
+              properties: bestFeature.properties || {},
+              geometry: {
+                type: 'Polygon',
+                coordinates: [bestRing]
+              }
+            };
+            this._buildingSnapCache.set(cacheKey, {
+              feature: isolatedFeature,
+              centroid,
+              height
+            });
+            return isolatedFeature;
+          }
         }
-        const centroid = (ring && computePolygonCentroid(ring)) || [lon, lat];
-        const height = Math.max(Number(bestFeature.properties?.height || bestFeature.properties?.render_height) || 18, 16);
-        this._buildingSnapCache.set(cacheKey, {
-          feature: bestFeature,
-          centroid,
-          height
-        });
       }
 
-      return bestFeature;
+      return null;
     } catch {
       return null;
     }
@@ -1036,6 +1052,23 @@ export class Map3DEngine {
       if (this.picking) {
         this.onPickLocation?.({ lat: e.lngLat.lat, lon: e.lngLat.lng });
       }
+    });
+
+    // 3D 건물 타일 로드/렌더링 완료 시 마커 배지 옥상 위치 및 스포트라이트 자동 동기화 (디바운스 80ms)
+    let idleSyncTimer = null;
+    map.on('idle', () => {
+      if (idleSyncTimer) clearTimeout(idleSyncTimer);
+      idleSyncTimer = setTimeout(() => {
+        if (!this.map) return;
+        this._updateSpotlightFootprints();
+        this._updateDeckLayers();
+        this._totemManager?.sync({
+          school: this.school,
+          facilities: this.facilities,
+          selectedFacility: this.selectedFacility,
+          hoveredFacility: this.hoveredFacility
+        });
+      }, 80);
     });
   }
 
