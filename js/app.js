@@ -26,7 +26,7 @@ import {
   analyzeTerrainProfile
 } from './geo-utils.js';
 import { Map3DEngine } from './map3d-engine.js';
-import { InspectorPanel } from './inspector-panel.js';
+import { InspectorPanel, renderInlineDetailHtml } from './inspector-panel.js';
 
 /* ==========================================================================
    1. State & Local Storage Initialization
@@ -297,6 +297,7 @@ function setSchool(s) {
   }
 
   inspectorPanel?.render({ school: S.school, facility: null });
+  syncSelectedAccordion();
   saveState();
   render();
 
@@ -475,7 +476,7 @@ function setPicking(on) {
   if (DOM.mapHint) {
     DOM.mapHint.textContent = on
       ? '지도 위 원하는 지점을 클릭해 기준 위치를 지정하세요.'
-      : '핀을 누르면 기관 정보가 목록과 3D 상세 카드에서 표시돼요.';
+      : '핀이나 목록을 누르면 3D 건물 클로즈업과 함께 고도 단면·로드뷰가 표시돼요.';
   }
 
   mapEngine?.updateState({ picking: S.picking });
@@ -505,6 +506,101 @@ let currentFacilities = [];
 let allFacilitiesWithDist = [];
 
 /**
+ * 선택된 기관에 대한 좌측 목록 인라인 아코디언 및 하단 독 바(dock) 상태 동기화
+ */
+function syncSelectedAccordion() {
+  const mapStage = document.querySelector('.map-stage');
+  const hasSelection = Boolean(S.sel && S.school);
+  mapStage?.classList.toggle('has-dock', hasSelection);
+
+  if (!DOM.list) return;
+
+  const currentSelKey = S.sel ? facilityKey(S.sel) : null;
+
+  // 선택되지 않은 아이템에서 기존 아코디언 마운트 제거
+  DOM.list.querySelectorAll('.item').forEach(itemEl => {
+    if (!currentSelKey || itemEl.dataset.key !== currentSelKey) {
+      const staleMount = itemEl.querySelector('.item-accordion-mount');
+      if (staleMount) staleMount.remove();
+    }
+  });
+
+  if (!hasSelection) return;
+
+  const selectedItemEl = DOM.list.querySelector(`.item[data-key="${currentSelKey}"]`);
+  if (!selectedItemEl) return;
+
+  if (!selectedItemEl.classList.contains('on')) {
+    selectedItemEl.classList.add('on');
+  }
+
+  const siblings = getBuildingSiblings(allFacilitiesWithDist, S.sel);
+  const profile = analyzeTerrainProfile(
+    S.school,
+    S.sel,
+    (lon, lat) => mapEngine?.sampleElevation(lon, lat)
+  );
+
+  let mount = selectedItemEl.querySelector('.item-accordion-mount');
+  if (!mount) {
+    mount = document.createElement('div');
+    mount.className = 'item-accordion-mount';
+
+    // 이벤트 위임: 아코디언 내부 클릭 시 상위 .item 클릭 이벤트로 버블링 방지 및 동작 처리
+    mount.addEventListener('click', (e) => {
+      const target = e.target;
+
+      // 1) 동일 건물 동거 기관 선택 칩
+      const sibBtn = target.closest('[data-action="select-sibling"]');
+      if (sibBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const key = sibBtn.dataset.key || sibBtn.getAttribute('data-key');
+        if (key) {
+          const match = allFacilitiesWithDist.find(f => facilityKey(f) === key) ||
+                        D.res.find(f => facilityKey(f) === key);
+          if (match) {
+            selectFacility(match, false);
+          }
+        }
+        return;
+      }
+
+      // 2) 외부 <a> 링크 (로드뷰, 길찾기, 네이버 지도 등)
+      const link = target.closest('a');
+      if (link) {
+        e.stopPropagation();
+        return;
+      }
+
+      // 3) 번호 복사 등 내부 버튼 전파 중단 및 동작 처리
+      const copyBtn = target.closest('[data-action="copy-phone"], .copy');
+      if (copyBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const ph = copyBtn.dataset.copyPh || copyBtn.dataset.ph || copyBtn.getAttribute('data-copy-ph');
+        if (ph) copyToClipboard(ph, `${ph} 복사했어요`);
+        return;
+      }
+
+      // 4) 그 외 아코디언 내부 클릭 시 .item 토글 방지
+      e.stopPropagation();
+    });
+
+    selectedItemEl.appendChild(mount);
+  }
+
+  if (typeof renderInlineDetailHtml === 'function') {
+    mount.innerHTML = renderInlineDetailHtml({
+      school: S.school,
+      facility: S.sel,
+      siblings,
+      profile
+    });
+  }
+}
+
+/**
  * 목록 내 선택 하이라이트 동기화
  */
 function updateListSelection() {
@@ -512,6 +608,7 @@ function updateListSelection() {
   document.querySelectorAll('.item').forEach(it => {
     it.classList.toggle('on', Boolean(selKey && it.dataset.key === selKey));
   });
+  syncSelectedAccordion();
 }
 
 /**
@@ -534,6 +631,8 @@ function refreshInspector() {
     profile,
     isOrbiting: Boolean(mapEngine?.isOrbiting)
   });
+
+  syncSelectedAccordion();
 }
 
 /**
@@ -551,6 +650,7 @@ function selectFacility(r, fromMap) {
     mapEngine?.updateState({ selectedFacility: null });
     inspectorPanel?.render({ school: S.school, facility: null });
     updateListSelection();
+    syncSelectedAccordion();
     return;
   }
 
@@ -566,16 +666,26 @@ function selectFacility(r, fromMap) {
   mapEngine?.focusFacility(S.school, S.sel);
   updateListSelection();
 
-  // 스크롤 동기화
-  if (fromMap) {
-    const it = document.querySelector(`.item[data-key="${facilityKey(targetFacility)}"]`);
-    it?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  } else if (window.innerWidth <= 900) {
+  // 인스펙터 패널 및 좌측 아코디언 즉시 렌더링
+  refreshInspector();
+
+  // 좌측 목록 컨테이너 내부에서만 부드럽게 스크롤 보정 (전체 페이지 점프 방지)
+  if (DOM.list) {
+    const it = DOM.list.querySelector(`.item[data-key="${facilityKey(targetFacility)}"]`);
+    if (it) {
+      const listRect = DOM.list.getBoundingClientRect();
+      const itemRect = it.getBoundingClientRect();
+      if (itemRect.top < listRect.top || itemRect.bottom > listRect.bottom) {
+        DOM.list.scrollTo({
+          top: Math.max(0, DOM.list.scrollTop + (itemRect.top - listRect.top) - 12),
+          behavior: 'smooth'
+        });
+      }
+    }
+  }
+  if (!fromMap && window.innerWidth <= 900) {
     document.querySelector('.mapcard')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
-
-  // 인스펙터 패널 즉시 렌더링
-  refreshInspector();
 
   // 3D 카메라 비행 완료(1.15초) 후 고해상도 DEM 타일 로드 반영을 위해 재샘플링
   setTimeout(() => {
@@ -744,6 +854,8 @@ function render() {
         });
       });
     }
+
+    syncSelectedAccordion();
   }
 
   // 7) 3D 지도 엔진 상태 동기화
@@ -823,6 +935,7 @@ inspectorPanel = new InspectorPanel({
     mapEngine?.updateState({ selectedFacility: null });
     inspectorPanel.render({ school: S.school, facility: null });
     updateListSelection();
+    syncSelectedAccordion();
   },
   onSelectFacility: (fac, fromMap) => {
     selectFacility(fac, fromMap);

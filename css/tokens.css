@@ -704,7 +704,7 @@ header p {
   position: relative;
   display: block;
   width: 100%;
-  height: min(calc(100vh - 110px), 800px);
+  height: clamp(460px, calc(100vh - 235px), 720px);
   min-height: 420px;
   background: var(--sea);
   touch-action: manipulation;

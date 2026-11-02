@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>학교 주변 도움 기관 찾기 · 3D 디지털 트윈</title>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
-  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.2.0/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css">
   <link rel="stylesheet" href="./css/tokens.css">
   <link rel="stylesheet" href="./css/map3d-ui.css">
 </head>
@@ -91,7 +91,7 @@
 
     <section class="card mapcard" aria-label="지도">
       <div class="maphead">
-        <span class="hint" id="mapHint">핀을 누르면 기관 정보가 목록과 3D 상세 카드에서 표시돼요.</span>
+        <span class="hint" id="mapHint">핀이나 목록을 누르면 3D 건물 클로즈업과 함께 고도 단면·로드뷰가 표시돼요.</span>
         <div class="mapbtns">
           <button class="mbtn" id="fitBtn" type="button">범위에 맞추기</button>
           <button class="mbtn" id="allBtn" type="button">4개 구 전체</button>
@@ -133,7 +133,7 @@
 
 <div class="toast" id="toast" hidden></div>
 
-<script src="https://unpkg.com/maplibre-gl@5.2.0/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/pmtiles@4.3.0/dist/pmtiles.js"></script>
 <script src="https://unpkg.com/deck.gl@9.1.4/dist.min.js"></script>
 <script type="module" src="./js/app.js"></script>

@@ -65,7 +65,10 @@ function createCircleCoordinates(lon, lat, radiusMeters, steps = 24) {
 }
 
 /**
- * OpenFreeMap Positron 테마 보정 헬퍼
+ * OpenFreeMap Positron 테마 보정 및 한국어 전용 카토그래피 정제 헬퍼
+ * - 시각적 노이즈(도로 쉴드, 중복 행정구역 라벨, POI) 제거
+ * - 모든 라벨 한국어 우선 명칭 및 대문자 방지 강제
+ * - 베이스맵 라벨 톤다운을 통한 맞춤지원 시설 시인성 극대화
  * @param {Object} style Positron 원본 스타일 JSON
  * @param {'light'|'dark'} theme
  * @returns {Object} 보정된 스타일 JSON
@@ -98,6 +101,41 @@ function customizeBaseStyle(style, theme) {
     // 기본 평면 건물 레이어 숨김 처리 (우리가 직접 3D 익스트루전으로 렌더링)
     if (l.id === 'building' || (l['source-layer'] === 'building' && l.type === 'fill')) {
       l.layout.visibility = 'none';
+    }
+
+    // 도로 쉴드/노선 번호, POI, OFM 중복 동/지명 레이어 숨김 처리 (자체 검증된 동/구 라벨 보유)
+    const isRoadShield = l.id.includes('shield') || (l.id.includes('highway-name-path') && !!l.layout['icon-image']);
+    const isPoi = l.id.includes('poi');
+    const isOfmPlace = l.id.includes('place_suburb') ||
+      l.id.includes('place_neighbourhood') ||
+      l.id.includes('place_quarter') ||
+      l.id.includes('place-suburb') ||
+      l.id.includes('place-neighbourhood') ||
+      l.id.includes('place_hamlet') ||
+      l.id.includes('place_isolated');
+
+    if (isRoadShield || isPoi || isOfmPlace) {
+      l.layout.visibility = 'none';
+    }
+
+    // 잔여 모든 활성 심볼(라벨) 레이어 정제
+    if (l.type === 'symbol' && l.layout.visibility !== 'none') {
+      // 1) 한국어 우선 라벨 텍스트 강제
+      l.layout['text-field'] = ['coalesce', ['get', 'name:ko'], ['get', 'name_ko'], ['get', 'name:kr'], ['get', 'name']];
+
+      // 2) 영문 대문자 표기(SEODAESIN-DONG 등) 방지
+      l.layout['text-transform'] = 'none';
+
+      // 3) 도로/교통 심볼 레이어의 아이콘 제거 (고속도로/국도 [2;77] 박스 방지)
+      if (l.id.includes('road') || l.id.includes('transport') || l.id.includes('highway') || l.id.includes('motorway') || l.id.includes('traffic') || l['source-layer'] === 'transportation_name' || l['source-layer'] === 'transportation') {
+        delete l.layout['icon-image'];
+      }
+
+      // 4) 베이스맵 도로/지명 텍스트 차분하게 톤다운 (복지 시설 및 라벨 부각)
+      l.paint['text-color'] = isDark ? '#7E95A4' : '#647783';
+      l.paint['text-halo-color'] = isDark ? 'rgba(13,21,26,0.9)' : 'rgba(255,255,255,0.92)';
+      l.paint['text-halo-width'] = 1.6;
+      l.paint['text-opacity'] = 0.72;
     }
 
     return l;
@@ -161,6 +199,7 @@ export class Map3DEngine {
     this._sonarRaf = null;
     this._firstSymbolId = null;
     this._isMapLoaded = false;
+    this._facilityClusters = [];
   }
 
   /**
@@ -365,11 +404,14 @@ export class Map3DEngine {
     // 7) 타깃 기관 & 학교 스포트라이트 발광 프리즘 레이어
     this._setupSpotlightLayers(beforeId);
 
-    // 8) deck.gl MapboxOverlay 인터리브드 등록
+    // 8) WebGL 한국어 기관 충돌 방지 라벨 레이어 등록 (beforeId 없이 3D 건물 위 최상단 렌더링)
+    this._setupFacilityLabelLayer();
+
+    // 9) deck.gl MapboxOverlay 등록 (MapLibre v5 호환 오버레이 모드)
     if (window.deck && window.deck.MapboxOverlay) {
       try {
         this._deckOverlay = new window.deck.MapboxOverlay({
-          interleaved: true,
+          interleaved: false,
           layers: []
         });
         map.addControl(this._deckOverlay);
@@ -378,7 +420,7 @@ export class Map3DEngine {
       }
     }
 
-    // 9) TotemMarkerManager 인스턴스화
+    // 10) TotemMarkerManager 인스턴스화
     this._totemManager = new TotemMarkerManager(this.map, {
       onSelectFacility: (fac, center) => this.onSelectFacility?.(fac, center),
       onHoverFacility: (fac) => this.onHoverFacility?.(fac)
@@ -483,7 +525,7 @@ export class Map3DEngine {
       beforeId
     );
 
-    // 4) 동 이름 라벨 (고배율)
+    // 4) 동 이름 라벨 (고배율 - 은은하게 톤다운하여 시설 라벨 공존)
     map.addLayer({
       id: 'dong-labels-symbol',
       type: 'symbol',
@@ -491,6 +533,7 @@ export class Map3DEngine {
       minzoom: 12.5,
       layout: {
         'text-field': ['coalesce', ['get', 'nm'], ['get', 'name'], ''],
+        'text-font': ['Noto Sans Regular'],
         'text-size': 11.5,
         'text-anchor': 'center',
         'text-allow-overlap': false
@@ -498,7 +541,8 @@ export class Map3DEngine {
       paint: {
         'text-color': this.theme === 'dark' ? '#A3B4BE' : '#697B84',
         'text-halo-color': this.theme === 'dark' ? 'rgba(16,38,50,0.85)' : 'rgba(255,255,255,0.85)',
-        'text-halo-width': 1.6
+        'text-halo-width': 1.6,
+        'text-opacity': 0.75
       }
     });
 
@@ -510,13 +554,15 @@ export class Map3DEngine {
       maxzoom: 14.2,
       layout: {
         'text-field': ['coalesce', ['get', 'gu'], ['get', 'name'], ''],
+        'text-font': ['Noto Sans Regular'],
         'text-size': 15,
         'text-anchor': 'center'
       },
       paint: {
         'text-color': this.theme === 'dark' ? '#E1EBF0' : '#1F343E',
         'text-halo-color': this.theme === 'dark' ? 'rgba(16,38,50,0.9)' : 'rgba(255,255,255,0.9)',
-        'text-halo-width': 2.2
+        'text-halo-width': 2.2,
+        'text-opacity': 0.85
       }
     });
   }
@@ -573,6 +619,7 @@ export class Map3DEngine {
       filter: ['==', ['get', 'kind'], 'ring-label'],
       layout: {
         'text-field': ['get', 'label'],
+        'text-font': ['Noto Sans Regular'],
         'text-size': 12,
         'symbol-placement': 'point',
         'text-offset': [0, -0.5]
@@ -664,7 +711,7 @@ export class Map3DEngine {
           type: 'fill-extrusion',
           source: 'busan-buildings',
           'source-layer': 'building',
-          minzoom: 12.6,
+          minzoom: 14,
           paint: {
             'fill-extrusion-color': buildingColorExpr,
             'fill-extrusion-height': buildingHeightExpr,
@@ -681,7 +728,7 @@ export class Map3DEngine {
           type: 'fill-extrusion',
           source: 'busan-buildings',
           'source-layer': 'building_part',
-          minzoom: 13.8,
+          minzoom: 14,
           paint: {
             'fill-extrusion-color': buildingColorExpr,
             'fill-extrusion-height': buildingHeightExpr,
@@ -743,6 +790,239 @@ export class Map3DEngine {
   }
 
   /**
+   * 네이티브 MapLibre 충돌 방지 한국어 기관 라벨 레이어 구성
+   * 3D 건물 익스트루전 상단에 최상단 심볼 레이어로 렌더링 (beforeId 미지정)
+   * @private
+   */
+  _setupFacilityLabelLayer() {
+    const map = this.map;
+    if (!map) return;
+
+    if (!map.getSource('facility-label-points')) {
+      map.addSource('facility-label-points', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+      });
+    }
+
+    if (!map.getLayer('facility-webgl-labels')) {
+      const isDarkHalo = this.theme === 'dark' || this.viewMode === 'satellite';
+      map.addLayer({
+        id: 'facility-webgl-labels',
+        type: 'symbol',
+        source: 'facility-label-points',
+        filter: ['!=', ['get', 'active'], true],
+        layout: {
+          'text-field': ['get', 'label'],
+          'text-font': ['Noto Sans Regular'],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 12.5, 11, 15, 12.2, 17, 13.5],
+          'text-variable-anchor': ['left', 'right', 'bottom', 'top'],
+          'text-radial-offset': 1.45,
+          'text-justify': 'auto',
+          'text-max-width': 11,
+          'text-allow-overlap': false,
+          'text-ignore-placement': false,
+          'text-optional': true,
+          'symbol-sort-key': ['get', 'sortKey']
+        },
+        paint: {
+          'text-color': isDarkHalo ? '#F2F7FA' : '#122530',
+          'text-halo-color': isDarkHalo ? 'rgba(10, 18, 24, 0.95)' : 'rgba(255, 255, 255, 0.96)',
+          'text-halo-width': isDarkHalo ? 2.3 : 2.2,
+          'text-halo-blur': 0.3
+        }
+      }); // beforeId 생략하여 3D 익스트루전 위 최상단 렌더링
+
+      // 클릭 시 해당 시설 선택 콜백 호출
+      map.on('click', 'facility-webgl-labels', (e) => {
+        if (!e.features || e.features.length === 0) return;
+        const cId = e.features[0].properties?.id;
+        const cluster = (this._facilityClusters || []).find(c => c.id === cId);
+        if (cluster && cluster.items && cluster.items.length > 0) {
+          this.onSelectFacility?.(cluster.items[0], true);
+        }
+      });
+
+      // 마우스 오버 시 포인터 커서 반응
+      map.on('mouseenter', 'facility-webgl-labels', () => {
+        if (!this.picking) {
+          map.getCanvas().style.cursor = 'pointer';
+        }
+      });
+      map.on('mouseleave', 'facility-webgl-labels', () => {
+        if (!this.picking) {
+          map.getCanvas().style.cursor = '';
+        }
+      });
+    }
+  }
+
+  /**
+   * 한국어 시설 라벨 GeoJSON 갱신 (groupCoLocated 12m 기반)
+   * 선택/호버된 시설 클러스터는 HTML 팝오버와의 중복 방지를 위해 active=true로 설정
+   * @private
+   */
+  _updateFacilityLabels() {
+    if (!this.map || !this.map.getSource('facility-label-points')) return;
+
+    const clusters = groupCoLocated(this.facilities || [], 12);
+    this._facilityClusters = clusters;
+
+    const selKey = this.selectedFacility ? facilityKey(this.selectedFacility) : null;
+    const hovKey = this.hoveredFacility ? facilityKey(this.hoveredFacility) : null;
+
+    const features = clusters.map(cluster => {
+      const firstItem = cluster.items[0];
+      const isMulti = cluster.isMulti || cluster.items.length > 1;
+      const label = isMulti
+        ? `${firstItem.name} 외 ${cluster.items.length - 1}곳`
+        : firstItem.name;
+      const color = resolveCatHex(cluster.primaryCat || firstItem.cat, this.theme);
+      const sortKey = Math.round(firstItem.m || 0);
+
+      const active = cluster.items.some(item => {
+        const k = facilityKey(item);
+        return (selKey && k === selKey) || (hovKey && k === hovKey);
+      });
+
+      return {
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: [cluster.lon, cluster.lat]
+        },
+        properties: {
+          id: cluster.id,
+          label,
+          color,
+          sortKey,
+          active
+        }
+      };
+    });
+
+    this.map.getSource('facility-label-points').setData({
+      type: 'FeatureCollection',
+      features
+    });
+  }
+
+  /**
+   * 테마 및 위성 뷰모드에 맞춘 WebGL 시설 라벨 페인트 속성 동기화
+   * @private
+   */
+  _updateFacilityLabelPaint() {
+    if (!this.map || !this.map.getLayer('facility-webgl-labels')) return;
+    const isDarkHalo = this.theme === 'dark' || this.viewMode === 'satellite';
+    const textColor = isDarkHalo ? '#F2F7FA' : '#122530';
+    const haloColor = isDarkHalo ? 'rgba(10, 18, 24, 0.95)' : 'rgba(255, 255, 255, 0.96)';
+    const haloWidth = isDarkHalo ? 2.3 : 2.2;
+    const haloBlur = 0.3;
+
+    this.map.setPaintProperty('facility-webgl-labels', 'text-color', textColor);
+    this.map.setPaintProperty('facility-webgl-labels', 'text-halo-color', haloColor);
+    this.map.setPaintProperty('facility-webgl-labels', 'text-halo-width', haloWidth);
+    this.map.setPaintProperty('facility-webgl-labels', 'text-halo-blur', haloBlur);
+  }
+
+  /**
+   * 화면에 렌더링된 실제 단일 3D 건물 폴리곤 정밀 검색 (Overture 전용 + 지리좌표 Point-in-Polygon 검증)
+   * - OpenMapTiles 블록 병합 MultiPolygon 및 3D 원근 투영 전경 건물 오매칭 원천 차단
+   * @param {number} lon
+   * @param {number} lat
+   * @returns {Object|null}
+   * @private
+   */
+  _findRenderedBuildingFeature(lon, lat) {
+    if (!this.map || lon == null || lat == null) return null;
+    if (!this.map.getLayer('overture-3d-buildings')) return null;
+
+    try {
+      const canvas = this.map.getCanvas();
+      const p = this.map.project([lon, lat]);
+      if (p.x < -24 || p.y < -24 || p.x > canvas.clientWidth + 24 || p.y > canvas.clientHeight + 24) {
+        return null;
+      }
+
+      const bbox = [
+        [p.x - 16, p.y - 16],
+        [p.x + 16, p.y + 16]
+      ];
+      const rendered = this.map.queryRenderedFeatures(bbox, { layers: ['overture-3d-buildings'] });
+      if (!rendered || rendered.length === 0) return null;
+
+      let bestFeature = null;
+      let bestDistM = Infinity;
+
+      for (let i = 0; i < rendered.length; i++) {
+        const f = rendered[i];
+        if (!f.geometry || f.geometry.type !== 'Polygon') continue;
+        const ring = f.geometry.coordinates && f.geometry.coordinates[0];
+        if (!ring || ring.length < 4) continue;
+
+        let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+        for (let j = 0; j < ring.length; j++) {
+          const rx = ring[j][0];
+          const ry = ring[j][1];
+          if (rx < minLon) minLon = rx;
+          if (rx > maxLon) maxLon = rx;
+          if (ry < minLat) minLat = ry;
+          if (ry > maxLat) maxLat = ry;
+        }
+
+        // 단일 건물 크기 상한 (~160m) 및 좌표 주변 11m AABB 필터 (원근 가림 건물 오매칭 차단)
+        if ((maxLon - minLon) > 0.0018 || (maxLat - minLat) > 0.0018) continue;
+        if (lon < minLon - 0.00012 || lon > maxLon + 0.00012 || lat < minLat - 0.00010 || lat > maxLat + 0.00010) {
+          continue;
+        }
+
+        // 1) Ray-casting Point-in-Polygon 검사
+        let inside = false;
+        for (let j = 0, k = ring.length - 1; j < ring.length; k = j++) {
+          const xi = ring[j][0], yi = ring[j][1];
+          const xk = ring[k][0], yk = ring[k][1];
+          const intersect = ((yi > lat) !== (yk > lat)) &&
+            (lon < (xk - xi) * (lat - yi) / ((yk - yi) || 1e-12) + xi);
+          if (intersect) inside = !inside;
+        }
+
+        if (inside) {
+          return f;
+        }
+
+        // 2) 도로명주소 출입구 좌표 오차 허용 (외벽에서 8m 이내 최단거리 건물)
+        let minEdgeSq = Infinity;
+        for (let j = 0, k = ring.length - 1; j < ring.length; k = j++) {
+          const ax = (ring[k][0] - lon) * 89800;
+          const ay = (ring[k][1] - lat) * 111320;
+          const bx = (ring[j][0] - lon) * 89800;
+          const by = (ring[j][1] - lat) * 111320;
+          const dx = bx - ax;
+          const dy = by - ay;
+          const lenSq = dx * dx + dy * dy;
+          let t = lenSq > 0 ? -(ax * dx + ay * dy) / lenSq : 0;
+          if (t < 0) t = 0;
+          else if (t > 1) t = 1;
+          const px = ax + t * dx;
+          const py = ay + t * dy;
+          const dSq = px * px + py * py;
+          if (dSq < minEdgeSq) minEdgeSq = dSq;
+        }
+
+        const edgeDistM = Math.sqrt(minEdgeSq);
+        if (edgeDistM <= 8 && edgeDistM < bestDistM) {
+          bestDistM = edgeDistM;
+          bestFeature = f;
+        }
+      }
+
+      return bestFeature;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * 사용자 인터랙션 이벤트 리스너 바인딩
    * @private
    */
@@ -787,15 +1067,18 @@ export class Map3DEngine {
     let shouldUpdateSpotlight = false;
     let shouldUpdateRings = false;
     let shouldTriggerSonar = false;
+    let shouldUpdateLabels = false;
 
     // 테마 변경 감지
     if (theme && theme !== this.theme) {
       this.setTheme(theme);
+      shouldUpdateLabels = true;
     }
 
     // 뷰모드 변경 감지
     if (viewMode && viewMode !== this.viewMode) {
       this.setViewMode(viewMode);
+      shouldUpdateLabels = true;
     }
 
     // 학교 변경 감지
@@ -819,6 +1102,7 @@ export class Map3DEngine {
       this.facilities = facilities || [];
       shouldUpdateDeck = true;
       shouldUpdateSpotlight = true;
+      shouldUpdateLabels = true;
     }
 
     // 선택/호버 시설 변경
@@ -826,12 +1110,14 @@ export class Map3DEngine {
       this.selectedFacility = selectedFacility;
       shouldUpdateDeck = true;
       shouldUpdateSpotlight = true;
+      shouldUpdateLabels = true;
     }
 
     if (hoveredFacility !== undefined && hoveredFacility !== this.hoveredFacility) {
       this.hoveredFacility = hoveredFacility;
       shouldUpdateDeck = true;
       shouldUpdateSpotlight = true;
+      shouldUpdateLabels = true;
     }
 
     // 좌표 지정 모드 변경
@@ -862,6 +1148,11 @@ export class Map3DEngine {
     // deck.gl 인터리브드 오버레이 업데이트
     if (shouldUpdateDeck) {
       this._updateDeckLayers();
+    }
+
+    // WebGL 한국어 기관 충돌 방지 라벨 업데이트
+    if (shouldUpdateLabels) {
+      this._updateFacilityLabels();
     }
 
     // HTML 토템 및 비콘 마커 동기화
@@ -947,7 +1238,9 @@ export class Map3DEngine {
   }
 
   /**
-   * 기관 및 학교 스포트라이트 발광 프리즘 갱신
+   * 기관 및 기준 학교 스포트라이트 발광 프리즘/폴리곤 갱신
+   * 화면 내 렌더링된 실제 3D 건물 폴리곤(Overture/OFM)을 탐색하여 일치 시 직사각형 실제 건물을 그대로 하이라이트하고,
+   * 미매칭 시 정밀 원형 프리즘으로 깔끔하게 폴백
    * @private
    */
   _updateSpotlightFootprints() {
@@ -957,20 +1250,37 @@ export class Map3DEngine {
     const selKey = this.selectedFacility ? facilityKey(this.selectedFacility) : null;
     const hovKey = this.hoveredFacility ? facilityKey(this.hoveredFacility) : null;
 
-    // 1) 기준 학교 프리즘 (주황색 앰버)
+    // 1) 기준 학교: 실제 건물 폴리곤 매칭 시도, 미매칭 시 radius 14, steps 24, height 28 원형 프리즘 폴백
     if (this.school && this.school.lon != null && this.school.lat != null) {
-      const schoolPrism = createCircleGeoJSON(this.school.lon, this.school.lat, 22, 8, {
-        id: 'school',
-        color: '#F2A43A',
-        height: 42,
-        base: 0,
-        opacity: 0.95
-      });
-      features.push(schoolPrism);
+      const schoolBuilding = this._findRenderedBuildingFeature(this.school.lon, this.school.lat);
+      if (schoolBuilding && schoolBuilding.geometry) {
+        const height = Math.max(Number(schoolBuilding.properties?.height) || 18, 16) + 1.5;
+        features.push({
+          type: 'Feature',
+          properties: {
+            id: 'school',
+            color: '#F2A43A',
+            height,
+            base: 0,
+            opacity: 0.95
+          },
+          geometry: schoolBuilding.geometry
+        });
+      } else {
+        features.push(createCircleGeoJSON(this.school.lon, this.school.lat, 14, 24, {
+          id: 'school',
+          color: '#F2A43A',
+          height: 28,
+          base: 0,
+          opacity: 0.95
+        }));
+      }
     }
 
-    // 2) 기관별 프리즘
+    // 2) 기관별 프리즘: 선택/호버된 기관은 실제 건물 폴리곤(또는 12m 원형 프리즘), 미선택 기관은 은은한 8m 그라운드 플린스(height: 6)
     const facilities = this.facilities || [];
+    const seenPlinthCoords = new Set();
+
     for (let i = 0; i < facilities.length; i++) {
       const f = facilities[i];
       if (f.lon == null || f.lat == null) continue;
@@ -980,20 +1290,51 @@ export class Map3DEngine {
       const isHovered = hovKey === fKey;
       const catColor = resolveCatHex(f.cat, this.theme);
 
-      const radius = isSelected ? 22 : (isHovered ? 18 : 14);
-      const height = isSelected ? 48 : (isHovered ? 34 : 22);
-      const opacity = isSelected ? 0.95 : (isHovered ? 0.9 : 0.75);
-
-      const prism = createCircleGeoJSON(f.lon, f.lat, radius, 8, {
-        id: fKey,
-        color: catColor,
-        height,
-        base: 0,
-        opacity,
-        isSelected,
-        isHovered
-      });
-      features.push(prism);
+      if (isSelected || isHovered) {
+        const buildingFeat = this._findRenderedBuildingFeature(f.lon, f.lat);
+        if (buildingFeat && buildingFeat.geometry) {
+          const height = Math.max(Number(buildingFeat.properties?.height) || 18, 16) + 1.5;
+          features.push({
+            type: 'Feature',
+            properties: {
+              id: fKey,
+              color: catColor,
+              height,
+              base: 0,
+              opacity: isSelected ? 0.95 : 0.88,
+              isSelected,
+              isHovered
+            },
+            geometry: buildingFeat.geometry
+          });
+        } else {
+          // 건물 폴리곤 미매칭 시 12m 원형 프리즘으로 깔끔하게 폴백
+          features.push(createCircleGeoJSON(f.lon, f.lat, 12, 24, {
+            id: fKey,
+            color: catColor,
+            height: isSelected ? 38 : 26,
+            base: 0,
+            opacity: isSelected ? 0.95 : 0.88,
+            isSelected,
+            isHovered
+          }));
+        }
+      } else {
+        // 미선택 기관용 은은한 8m 높이 6 그라운드 플린스
+        const coordKey = `${f.lon.toFixed(5)}_${f.lat.toFixed(5)}`;
+        if (!seenPlinthCoords.has(coordKey)) {
+          seenPlinthCoords.add(coordKey);
+          features.push(createCircleGeoJSON(f.lon, f.lat, 8, 16, {
+            id: fKey,
+            color: catColor,
+            height: 6,
+            base: 0,
+            opacity: 0.42,
+            isSelected: false,
+            isHovered: false
+          }));
+        }
+      }
     }
 
     this.map.getSource('spotlight-footprints').setData({
@@ -1151,8 +1492,14 @@ export class Map3DEngine {
       zoom: 17.3,
       pitch,
       bearing,
+      padding: { top: 52, bottom: 92, left: 28, right: 28 },
       duration: 1000,
       essential: true
+    });
+
+    // 고배율 줌 전환 후 고해상도 Overture 건물 폴리곤 로드 완료 시 스포트라이트 자동 스냅
+    this.map.once('idle', () => {
+      this._updateSpotlightFootprints();
     });
   }
 
@@ -1217,11 +1564,13 @@ export class Map3DEngine {
       this.map.setLayoutProperty('satellite-raster', 'visibility', isSatellite ? 'visible' : 'none');
     }
 
-    // 2) 3D 지형 on/off
+    // 2) 3D 지형 on/off (이미 활성화된 지형 재호출 시 MapLibre v5 타일 키 캐시 초기화 방지)
     if (isFlat) {
-      this.map.setTerrain(null);
+      if (this.map.getTerrain()) {
+        this.map.setTerrain(null);
+      }
       this.map.easeTo({ pitch: 0, bearing: 0, duration: 600 });
-    } else {
+    } else if (!this.map.getTerrain()) {
       this.map.setTerrain({ source: 'terrain-dem', exaggeration: 1.35 });
     }
 
@@ -1233,6 +1582,9 @@ export class Map3DEngine {
     if (this.map.getLayer('overture-3d-building-parts')) {
       this.map.setPaintProperty('overture-3d-building-parts', 'fill-extrusion-opacity', buildingOpacity);
     }
+
+    // 4) WebGL 시설 라벨 헤일로 페인트 갱신 (위성 모드 진입 시 다크 헤일로 적용)
+    this._updateFacilityLabelPaint();
   }
 
   /**
@@ -1262,6 +1614,16 @@ export class Map3DEngine {
       this.map.setPaintProperty('dong-outlines-line', 'line-color', isDark ? '#3B4F5C' : '#C9C2B1');
     }
 
+    if (this.map.getLayer('dong-labels-symbol')) {
+      this.map.setPaintProperty('dong-labels-symbol', 'text-color', isDark ? '#A3B4BE' : '#697B84');
+      this.map.setPaintProperty('dong-labels-symbol', 'text-halo-color', isDark ? 'rgba(16,38,50,0.85)' : 'rgba(255,255,255,0.85)');
+    }
+
+    if (this.map.getLayer('gu-labels-symbol')) {
+      this.map.setPaintProperty('gu-labels-symbol', 'text-color', isDark ? '#E1EBF0' : '#1F343E');
+      this.map.setPaintProperty('gu-labels-symbol', 'text-halo-color', isDark ? 'rgba(16,38,50,0.9)' : 'rgba(255,255,255,0.9)');
+    }
+
     if (this.map.getLayer('radar-rings-line')) {
       this.map.setPaintProperty('radar-rings-line', 'line-color', isDark ? '#5CB8D6' : '#0F6E8C');
     }
@@ -1275,6 +1637,29 @@ export class Map3DEngine {
         this.map.setPaintProperty('overture-3d-building-parts', 'fill-extrusion-color', colorExpr);
       }
     }
+
+    if (this.map.getLayer('ofm-3d-buildings-fallback')) {
+      this.map.setPaintProperty('ofm-3d-buildings-fallback', 'fill-extrusion-color', isDark ? '#1E2B35' : '#E2DDD4');
+    }
+
+    // 베이스맵 심볼 레이어 도로/지명 텍스트 톤다운 갱신
+    const baseTextColor = isDark ? '#7E95A4' : '#647783';
+    const baseHaloColor = isDark ? 'rgba(13,21,26,0.9)' : 'rgba(255,255,255,0.92)';
+    const styleLayers = this.map.getStyle()?.layers || [];
+    for (const l of styleLayers) {
+      if (l.type === 'symbol' && !l.id.includes('dong-') && !l.id.includes('gu-') && !l.id.includes('facility-') && !l.id.includes('radar-')) {
+        try {
+          this.map.setPaintProperty(l.id, 'text-color', baseTextColor);
+          this.map.setPaintProperty(l.id, 'text-halo-color', baseHaloColor);
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    // WebGL 한국어 기관 라벨 페인트 및 데이터 갱신
+    this._updateFacilityLabelPaint();
+    this._updateFacilityLabels();
   }
 
   /**
