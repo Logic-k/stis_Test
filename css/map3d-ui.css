@@ -1,0 +1,1054 @@
+/* ==========================================================================
+   STIS 3D Digital Twin Map UI & Diorama HUD Styles
+   - 3D Map Stage & Floating Controls
+   - Markers & Vertical Totem Stacks (markers-totem.js)
+   - Glassmorphism Facility Verification Inspector Card (inspector-panel.js)
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. 3D Map Stage & Floating HUD Controls
+   -------------------------------------------------------------------------- */
+.map-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 3D / Satellite / 2D Mode Switcher Segments */
+.mode-seg {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 15;
+  display: inline-flex;
+  padding: 3px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  box-shadow: var(--glass-shadow);
+  user-select: none;
+}
+
+.mode-btn {
+  font-family: var(--f-body);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
+}
+
+.mode-btn:hover {
+  color: var(--ink);
+  background: rgba(15, 110, 140, 0.08);
+}
+
+.mode-btn[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(15, 110, 140, 0.35);
+}
+
+.mode-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* Floating Mini HUD (Top-Right Controls) */
+.hud-floating {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.hud-btn {
+  font-family: var(--f-body);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 11px;
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  background: var(--glass-bg);
+  color: var(--ink);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--glass-shadow);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  transition: all 0.18s ease;
+  user-select: none;
+}
+
+.hud-btn:hover {
+  background: var(--panel);
+  border-color: var(--accent);
+  color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.hud-btn:active {
+  transform: translateY(0);
+}
+
+.hud-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* 360° Orbit Active State & Rotation Keyframe */
+@keyframes hud-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.hud-btn.is-orbiting,
+.is-orbiting .hud-spin-icon {
+  background: var(--focus) !important;
+  border-color: var(--focus) !important;
+  color: #2A1B05 !important;
+  font-weight: 700;
+  box-shadow: 0 0 14px rgba(242, 164, 58, 0.6);
+}
+
+.hud-btn.is-orbiting .hud-spin-icon,
+.hud-spin-icon.is-spinning {
+  display: inline-block;
+  animation: hud-spin 2.5s linear infinite;
+}
+
+/* Map Loading Badge (Diorama Terrain / Buildings Stream Status) */
+.map-loading-badge {
+  position: absolute;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px;
+  border-radius: 999px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  opacity: 1;
+  transition: opacity 0.4s ease, transform 0.4s ease;
+  pointer-events: none;
+}
+
+.map-loading-badge.is-hidden,
+.map-loading-badge[hidden] {
+  opacity: 0;
+  transform: translate(-50%, -10px);
+  display: none !important;
+}
+
+.map-loading-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: hud-spin 0.8s linear infinite;
+}
+
+/* Picking Mode Interactive Banner */
+.picking-banner {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 20px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--bg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  animation: banner-slide-down 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: auto;
+}
+
+@keyframes banner-slide-down {
+  from {
+    transform: translate(-50%, -18px);
+    opacity: 0;
+  }
+  to {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+}
+
+.picking-banner .icon {
+  font-size: 16px;
+  animation: pin-bounce 1s ease infinite alternate;
+}
+
+@keyframes pin-bounce {
+  from { transform: translateY(0); }
+  to { transform: translateY(-3px); }
+}
+
+.picking-banner[hidden] {
+  display: none !important;
+}
+
+.picking-banner-cancel {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 9px;
+  margin-left: 6px;
+  border-radius: 6px;
+  background: rgba(128, 128, 128, 0.28);
+  color: var(--bg);
+  border: 0;
+  cursor: pointer;
+}
+
+.picking-banner-cancel:hover {
+  background: rgba(128, 128, 128, 0.42);
+}
+
+/* --------------------------------------------------------------------------
+   2. 3D Markers & Vertical Totem Stacks (markers-totem.js)
+   -------------------------------------------------------------------------- */
+
+/* (A) Reference School 3D Beacon */
+.stis-school-beacon {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: none;
+  z-index: 10;
+}
+
+/* Pulse Ripple Animation expanding along 3D terrain surface */
+.beacon-pulse {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  margin-left: -22px;
+  margin-bottom: -22px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: rgba(15, 110, 140, 0.25);
+  transform: rotateX(60deg) scale(0.6);
+  animation: beacon-ripple 2.4s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+  pointer-events: none;
+}
+
+.beacon-pulse--delay {
+  animation-delay: 1.2s;
+}
+
+@keyframes beacon-ripple {
+  0% {
+    transform: rotateX(60deg) scale(0.4);
+    opacity: 0.95;
+  }
+  70% {
+    transform: rotateX(60deg) scale(2.2);
+    opacity: 0.15;
+  }
+  100% {
+    transform: rotateX(60deg) scale(2.6);
+    opacity: 0;
+  }
+}
+
+/* School Beacon Head / Core & Stem */
+.beacon-head,
+.beacon-core {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent) 0%, #084357 100%);
+  border: 3px solid #FFFFFF;
+  box-shadow: 0 4px 14px rgba(15, 110, 140, 0.45), 0 0 0 2px rgba(15, 110, 140, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #FFFFFF;
+  z-index: 2;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.beacon-head svg,
+.beacon-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.stis-school-beacon:hover .beacon-head,
+.stis-school-beacon:hover .beacon-core {
+  transform: scale(1.1);
+}
+
+.beacon-stem {
+  width: 3px;
+  height: 14px;
+  background: linear-gradient(to bottom, #FFFFFF 0%, var(--accent) 100%);
+  border-radius: 2px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  z-index: 1;
+}
+
+.beacon-base-ring {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 8px;
+  height: 4px;
+  margin-left: -4px;
+  border-radius: 50%;
+  background: var(--accent);
+  transform: rotateX(60deg);
+  box-shadow: 0 0 4px var(--accent);
+}
+
+.beacon-label {
+  position: absolute;
+  bottom: 100%;
+  margin-bottom: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1.5px solid var(--accent);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-weight: 700;
+  font-size: 12.5px;
+  white-space: nowrap;
+  box-shadow: 0 3px 10px rgba(16, 40, 50, 0.15);
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* (B) Single Facility 3D Pin */
+.stis-pin-3d {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: none;
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.pin-shadow,
+.pin-ground-shadow {
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  width: 18px;
+  height: 8px;
+  margin-left: -9px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.28);
+  filter: blur(1.5px);
+  pointer-events: none;
+  transform: rotateX(60deg);
+}
+
+.pin-stem {
+  width: 2.5px;
+  height: 10px;
+  background: #FFFFFF;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.pin-badge,
+.pin-head {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2.5px solid #FFFFFF;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.22);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--cat-color, var(--accent));
+  color: #FFFFFF;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease;
+}
+
+.pin-badge svg,
+.pin-head svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Speech Callout Popup on Pin Hover / Selection */
+.pin-callout {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  opacity: 0;
+  pointer-events: none;
+  padding: 4px 9px;
+  border-radius: 7px;
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.pin-callout-dist {
+  font-style: normal;
+  color: var(--accent-soft);
+  font-weight: 500;
+  font-size: 11px;
+}
+
+.pin-callout::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-left: -4px;
+  border-width: 4px;
+  border-style: solid;
+  border-color: var(--ink) transparent transparent transparent;
+}
+
+/* Hover & Selected States */
+.stis-pin-3d:hover,
+.stis-pin-3d.is-hovered {
+  z-index: 30;
+  transform: scale(1.12);
+}
+
+.stis-pin-3d:hover .pin-callout,
+.stis-pin-3d.is-hovered .pin-callout,
+.stis-pin-3d.is-selected .pin-callout {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.stis-pin-3d.is-selected {
+  z-index: 35;
+  transform: scale(1.2);
+}
+
+.stis-pin-3d.is-selected .pin-badge,
+.stis-pin-3d.is-selected .pin-head {
+  border-color: #FFFFFF;
+  box-shadow: 0 0 0 3.5px var(--focus), 0 6px 18px rgba(242, 164, 58, 0.6);
+}
+
+/* Approximate Location Hologram Pin Effect */
+.stis-pin-3d.is-approx .pin-badge,
+.stis-pin-3d.is-approx .pin-head {
+  border-style: dashed;
+  border-width: 2px;
+  animation: approx-shimmer 2.2s ease-in-out infinite;
+}
+
+@keyframes approx-shimmer {
+  0%, 100% { opacity: 0.95; filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.4)); }
+  50% { opacity: 0.72; filter: drop-shadow(0 0 8px var(--focus)); }
+}
+
+/* (C) Vertical Totem Stack (Multi-facility in single building) */
+.stis-totem-stack {
+  position: relative;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: none;
+  z-index: 20;
+}
+
+/* Light Pillar Line Rising from Rooftop */
+.totem-spine {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3px;
+  height: 100%;
+  background: linear-gradient(to top, rgba(15, 110, 140, 0.8) 0%, rgba(92, 184, 214, 0.25) 100%);
+  box-shadow: 0 0 6px rgba(15, 110, 140, 0.5);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.totem-base-ring {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 14px;
+  height: 6px;
+  margin-left: -7px;
+  border-radius: 50%;
+  background: var(--accent);
+  transform: rotateX(60deg);
+  box-shadow: 0 0 6px var(--accent);
+  pointer-events: none;
+}
+
+/* Top Badge: "복합 N곳" */
+.totem-head {
+  margin-top: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--bg);
+  font-family: var(--f-body);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.totem-head-icon {
+  font-size: 12px;
+}
+
+/* Vertically Stacked Pill Capsules */
+.totem-pills {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 4px;
+  z-index: 2;
+}
+
+.totem-pill {
+  font-family: var(--f-body);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 10px 5px 6px;
+  min-height: 32px;
+  border-radius: 8px;
+  border: 1.5px solid var(--glass-border);
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 2px 8px rgba(16, 40, 50, 0.12);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.totem-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--bg);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.totem-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.totem-name {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.totem-dist {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 2px;
+}
+
+.totem-pill:hover,
+.totem-pill.is-hovered {
+  transform: translateX(4px);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.totem-pill.is-selected {
+  background: var(--panel);
+  border-color: var(--focus);
+  color: var(--ink);
+  box-shadow: 0 0 0 2.5px var(--focus), 0 4px 14px rgba(242, 164, 58, 0.45);
+  font-weight: 700;
+  transform: translateX(6px);
+}
+
+.totem-pill.is-approx {
+  border-style: dashed;
+}
+
+.stis-totem-stack.has-selected .totem-spine {
+  background: linear-gradient(to top, var(--focus) 0%, rgba(242, 164, 58, 0.4) 100%);
+  box-shadow: 0 0 8px var(--focus);
+}
+
+/* --------------------------------------------------------------------------
+   3. Glassmorphism Facility Verification Inspector Card
+   -------------------------------------------------------------------------- */
+
+.inspector-host {
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
+  width: min(430px, calc(100% - 24px));
+  max-height: calc(100% - 28px);
+  z-index: 25;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.inspector-card {
+  pointer-events: auto;
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  border-radius: 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: inspector-slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  max-height: 85vh;
+  box-sizing: border-box;
+}
+
+@keyframes inspector-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.inspector-scroll-area {
+  padding: 14px 16px 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Inspector Header Area */
+.inspector-head-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.inspector-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.inspector-cat-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.inspector-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.inspector-orbit-btn {
+  font-family: var(--f-body);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+
+.inspector-orbit-btn:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.inspector-orbit-btn.is-active {
+  background: var(--focus);
+  border-color: var(--focus);
+  color: #2A1B05;
+  font-weight: 700;
+}
+
+.inspector-close-btn {
+  font-size: 16px;
+  line-height: 1;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.inspector-close-btn:hover {
+  color: var(--ink);
+  border-color: var(--ink);
+}
+
+/* Facility Name & Core Details */
+.facility-title {
+  margin: 4px 0 2px;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--ink);
+}
+
+.facility-desc {
+  font-size: 13.5px;
+  color: var(--muted);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.facility-addr {
+  font-size: 12.5px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.facility-approx-warn {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(242, 164, 58, 0.14);
+  border: 1px solid rgba(242, 164, 58, 0.4);
+  color: #925405;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+:root[data-theme="dark"] .facility-approx-warn {
+  color: #FFD494;
+}
+
+/* Sibling Multi-facility Chips in Same Building */
+.sibling-section {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(15, 110, 140, 0.06);
+  border: 1px solid rgba(15, 110, 140, 0.15);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sibling-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sibling-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sibling-chip {
+  font-family: var(--f-body);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 9px 4px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+}
+
+.sibling-chip:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.sibling-chip.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+
+/* --------------------------------------------------------------------------
+   4. Busan Topographic Profile & Slope Intelligence (.elev-box)
+   -------------------------------------------------------------------------- */
+.elev-box {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1.5px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Harbor / Sea Detour Alert Banner */
+.harbor-warn {
+  padding: 8px 11px;
+  border-radius: 8px;
+  background: rgba(46, 127, 192, 0.12);
+  border: 1px solid rgba(46, 127, 192, 0.35);
+  color: #19588C;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+:root[data-theme="dark"] .harbor-warn {
+  color: #79B8ED;
+}
+
+/* Inline Responsive Elevation Chart SVG */
+.elev-chart-wrap {
+  width: 100%;
+  position: relative;
+}
+
+.elev-chart-svg {
+  display: block;
+  width: 100%;
+  height: 78px;
+  overflow: visible;
+}
+
+/* Elevation Summary Metrics */
+.elev-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--line);
+}
+
+.elev-stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.elev-stat-lbl {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.elev-stat-val {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.elev-stat-sub {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* Steep Slope Warning Pill */
+.slope-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(196, 47, 37, 0.12);
+  border: 1px solid rgba(196, 47, 37, 0.3);
+  color: #B22218;
+  margin-top: 2px;
+}
+
+:root[data-theme="dark"] .slope-pill {
+  color: #F87D74;
+}
+
+/* --------------------------------------------------------------------------
+   5. Direct Verification & Action Buttons (.verify-actions, .vbtn)
+   -------------------------------------------------------------------------- */
+.verify-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 7px;
+}
+
+.vbtn {
+  font-family: var(--f-body);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1.5px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  text-decoration: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.vbtn:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.vbtn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.vbtn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  grid-column: span 1;
+}
+
+.vbtn-primary:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+  filter: brightness(1.1);
+}
+
+.vbtn-copy {
+  grid-column: span 1;
+}
+
+/* --------------------------------------------------------------------------
+   6. Responsive Layout Adjustments (Mobile <= 900px)
+   -------------------------------------------------------------------------- */
+@media (max-width: 900px) {
+  .inspector-host {
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-height: 70vh;
+  }
+
+  .inspector-card {
+    border-radius: 18px 18px 0 0;
+    border-bottom: 0;
+    border-left: 0;
+    border-right: 0;
+  }
+
+  .verify-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .mode-seg {
+    top: 10px;
+    left: 10px;
+  }
+
+  .hud-floating {
+    top: 10px;
+    right: 10px;
+  }
+}
